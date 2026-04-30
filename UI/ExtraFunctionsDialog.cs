@@ -1,135 +1,115 @@
 using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Threading;
 using System.Windows.Forms;
 using BDCOM.OLT.Manager.Core;
-using BDCOM.OLT.Manager.Enums;
-using BDCOM.OLT.Manager.Models;
+using BDCOM.OLT.Manager.UI;
 
-namespace BDCOM.OLT.Manager.UI
+namespace BDCOM.OLT.Manager
 {
-    public class ExtraFunctionsDialog : Form
+    public partial class ExtraFunctionsDialog : Form
     {
         private readonly MainForm _mainForm;
+        private readonly TelnetClient? _telnetClient;
 
         public ExtraFunctionsDialog(MainForm mainForm)
         {
             _mainForm = mainForm;
+            _telnetClient = mainForm.GetTelnetClient();
+
             InitializeComponent();
         }
 
         private void InitializeComponent()
         {
-            this.Text = "Дополнительные функции OLT";
-            this.Size = new Size(520, 680);
+            this.Text = "Дополнительные функции";
+            this.Size = new System.Drawing.Size(520, 420);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
 
-            int y = 20;
-
-            AddButton("💾 Save (write all)", Color.Teal, y, SaveConfig); y += 55;
-            AddButton("🔄 Reboot OLT", Color.Red, y, RebootOLT); y += 55;
-
-            var sep1 = new Label { Text = "────────────────────────────", Location = new Point(50, y), AutoSize = true };
-            Controls.Add(sep1); y += 40;
-
-            AddButton("🔴 Выкл LAN ONU", Color.Red, y, () => LanPortCommand(true)); y += 55;
-            AddButton("🟢 Вкл LAN ONU", Color.Green, y, () => LanPortCommand(false)); y += 55;
-
-            var sep2 = new Label { Text = "────────────────────────────", Location = new Point(50, y), AutoSize = true };
-            Controls.Add(sep2); y += 40;
-
-            AddButton("🔴⚠️ Выкл Порт EPON", Color.Red, y, OltPortOff); y += 55;
-            AddButton("🟢 Вкл Порт EPON", Color.Green, y, OltPortOn); y += 55;
-
-            var lblWarn = new Label
+            // Кнопка перезагрузки OLT
+            var btnRebootOlt = new Button
             {
-                Text = "⚠️ Внимание: Reboot OLT, управление портами и отключение LAN\nтребуют двойного подтверждения!",
-                Location = new Point(40, y),
-                Size = new Size(440, 60),
-                ForeColor = Color.OrangeRed,
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold)
+                Text = "Перезагрузить OLT",
+                Location = new System.Drawing.Point(60, 50),
+                Size = new System.Drawing.Size(400, 55),
+                BackColor = System.Drawing.Color.Crimson,
+                ForeColor = System.Drawing.Color.White,
+                Font = new System.Drawing.Font("Segoe UI", 11f, System.Drawing.FontStyle.Bold)
             };
-            Controls.Add(lblWarn);
+            btnRebootOlt.Click += BtnRebootOlt_Click;
 
-            y += 80;
-            var btnClose = new Button { Text = "Закрыть", Location = new Point(200, y), Size = new Size(120, 40) };
+            // Кнопка сохранения конфигурации
+            var btnSaveConfig = new Button
+            {
+                Text = "Сохранить конфигурацию (write all)",
+                Location = new System.Drawing.Point(60, 130),
+                Size = new System.Drawing.Size(400, 55),
+                BackColor = System.Drawing.Color.DarkGreen,
+                ForeColor = System.Drawing.Color.White,
+                Font = new System.Drawing.Font("Segoe UI", 10f)
+            };
+            btnSaveConfig.Click += BtnSaveConfig_Click;
+
+            // Кнопка закрытия
+            var btnClose = new Button
+            {
+                Text = "Закрыть",
+                Location = new System.Drawing.Point(60, 320),
+                Size = new System.Drawing.Size(400, 45),
+                Font = new System.Drawing.Font("Segoe UI", 10f)
+            };
             btnClose.Click += (s, e) => this.Close();
-            Controls.Add(btnClose);
+
+            this.Controls.Add(btnRebootOlt);
+            this.Controls.Add(btnSaveConfig);
+            this.Controls.Add(btnClose);
         }
 
-        private void AddButton(string text, Color color, int y, Action action)
+        private async void BtnRebootOlt_Click(object? sender, EventArgs e)
         {
-            var btn = new Button
+            if (_telnetClient == null)
             {
-                Text = text,
-                Location = new Point(80, y),
-                Size = new Size(360, 42),
-                BackColor = color,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10.5f, FontStyle.Bold)
-            };
-            btn.Click += (s, e) => action();
-            Controls.Add(btn);
+                MessageBox.Show("Нет активного подключения к OLT", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // Первое подтверждение
+            var result = MessageBox.Show(
+                "ВНИМАНИЕ!\n\nOLT будет перезагружен!\n\nЭто действие приведёт к отключению ВСЕХ абонентов!\n\nПродолжить?",
+                "Критическое действие — Перезагрузка OLT",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+
+            if (result != DialogResult.Yes) return;
+
+            // Второе подтверждение (ввод слова "АДЕКВАТНЫЙ")
+            var secondConfirm = new SecondConfirmDialog("OLT", "перезагрузку OLT");
+            if (secondConfirm.ShowDialog(this) != DialogResult.OK) return;
+
+            // Выполняем команду
+            var (output, success) = await _telnetClient.ExecuteAsync("reload");
+
+            if (success)
+                MessageBox.Show("Команда на перезагрузку OLT отправлена.\nОборудование будет перезагружено.", "Успешно", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            else
+                MessageBox.Show("Не удалось отправить команду перезагрузки.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
-        private void SaveConfig()
+        private async void BtnSaveConfig_Click(object? sender, EventArgs e)
         {
-            _mainForm.ExecuteCommand("write all", "Конфигурация сохранена");
-        }
+            if (_telnetClient == null)
+            {
+                MessageBox.Show("Нет активного подключения", "Ошибка");
+                return;
+            }
 
-        private void RebootOLT()
-        {
-            if (_mainForm.CurrentDevice == null) return;
+            var (output, success) = await _telnetClient.ExecuteAsync("write all");
 
-            var dlg1 = new ConfirmDialog("olt_reboot", new Dictionary<string, string> { { "device", _mainForm.CurrentDevice.Name } });
-            if (dlg1.ShowDialog() != DialogResult.OK) return;
-
-            var dlg2 = new SecondConfirmDialog("", "olt");
-            if (dlg2.ShowDialog() != DialogResult.OK) return;
-
-            _mainForm.ExecuteCommand("reload", "OLT перезагружается...");
-        }
-
-        private void LanPortCommand(bool shutdown)
-        {
-            var p = _mainForm.GetCurrentParams();
-            if (p == null) return;
-
-            var dlg = new ConfirmDialog(shutdown ? "lan_off" : "lan_on", 
-                new Dictionary<string, string> { { "Порт", p.Port }, { "ONU", p.OnuId } });
-
-            if (dlg.ShowDialog() != DialogResult.OK) return;
-
-            string cmd = shutdown ? "epon onu port 1 ctc shutdown" : "no epon onu port 1 ctc shutdown";
-            _mainForm.ExecuteCommand($"interface epon {p.Slot}/{p.Port}:{p.OnuId}\n{cmd}\nexit", 
-                $"LAN порт {(shutdown ? "отключен" : "включен")}");
-        }
-
-        private void OltPortOff()
-        {
-            string port = _mainForm.GetCurrentPort();
-            if (string.IsNullOrEmpty(port)) return;
-
-            var dlg1 = new ConfirmDialog("olt_port_off", new Dictionary<string, string> { { "Порт", port } });
-            if (dlg1.ShowDialog() != DialogResult.OK) return;
-
-            var dlg2 = new SecondConfirmDialog(port, "port");
-            if (dlg2.ShowDialog() != DialogResult.OK) return;
-
-            _mainForm.ExecuteCommand($"interface epon 0/{port}\nshutdown\nexit\nwrite all", $"Порт EPON 0/{port} ОТКЛЮЧЕН");
-        }
-
-        private void OltPortOn()
-        {
-            string port = _mainForm.GetCurrentPort();
-            if (string.IsNullOrEmpty(port)) return;
-
-            var dlg = new ConfirmDialog("olt_port_on", new Dictionary<string, string> { { "Порт", port } });
-            if (dlg.ShowDialog() != DialogResult.OK) return;
-
-            _mainForm.ExecuteCommand($"interface epon 0/{port}\nno shutdown\nexit\nwrite all", $"Порт EPON 0/{port} ВКЛЮЧЕН");
+            if (success)
+                MessageBox.Show("Команда 'write all' выполнена успешно.\nКонфигурация сохранена.", "Успешно");
+            else
+                MessageBox.Show("Не удалось выполнить команду 'write all'.", "Ошибка");
         }
     }
 }

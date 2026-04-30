@@ -6,74 +6,69 @@ namespace BDCOM.OLT.Manager.Parsers
 {
     public static class OpticalParser
     {
-        public static Dictionary<string, double> ParseOnu(string output)
+        // Для "Оптика ONU"
+        public static string GetCleanOnuOptical(string raw)
         {
-            output = CleanOutput(output);
+            string text = Clean(raw);
+            var match = Regex.Match(text, @"RxPower\(dBm\)\s*[:\-]?\s*([-\d.]+)", RegexOptions.IgnoreCase);
+            if (match.Success)
+                return $"interface RxPower(dBm)\n----------- --------------\nepon0/1:1   {match.Groups[1].Value}";
 
-            var result = new Dictionary<string, double>();
-
-            var patterns = new[]
-            {
-                (@"RxPower\(dBm\)\s*[:=]?\s*([-\d.]+)", "RxPower"),
-                (@"TxPower\(dBm\)\s*[:=]?\s*([-\d.]+)", "TxPower"),
-                (@"Temperature\(C\)\s*[:=]?\s*([-\d.]+)", "Temperature"),
-                (@"Voltage\(V\)\s*[:=]?\s*([-\d.]+)", "Voltage"),
-                (@"BiasCurrent\(mA\)\s*[:=]?\s*([-\d.]+)", "BiasCurrent"),
-                (@"Rx Power\s*[:=]?\s*([-\d.]+)", "RxPower"),
-                (@"Tx Power\s*[:=]?\s*([-\d.]+)", "TxPower")
-            };
-
-            foreach (var (regex, key) in patterns)
-            {
-                var match = Regex.Match(output, regex, RegexOptions.IgnoreCase);
-                if (match.Success && double.TryParse(match.Groups[1].Value.Trim(), out double value))
-                {
-                    result[key] = value;
-                }
-            }
-
-            return result;
+            return text.Trim();
         }
 
-        public static List<(string OnuId, double RxPower)> ParsePort(string output)
+        // Для "Сигналы EPON" — улучшенный парсер с обработкой --More--
+        public static List<(int OnuId, double RxPower)> ParsePortOptical(string raw)
         {
-            output = CleanOutput(output);
+            string text = Clean(raw);
+            var list = new List<(int, double)>();
 
-            var results = new List<(string, double)>();
-
-            // Основной паттерн для твоей прошивки
-            var matches = Regex.Matches(output, @"epon\d*/\d*:?(\d+)\s+([-\d.]+)", RegexOptions.IgnoreCase);
+            // Более надёжный паттерн
+            var matches = Regex.Matches(text, @"epon\d+/\d+:(\d+)\s+([-\d.]+)", RegexOptions.IgnoreCase);
 
             foreach (Match m in matches)
             {
                 if (int.TryParse(m.Groups[1].Value, out int onuId) && 
                     double.TryParse(m.Groups[2].Value, out double power))
                 {
-                    results.Add((onuId.ToString(), power));
+                    list.Add((onuId, power));
                 }
             }
 
-            return results.OrderBy(x => int.Parse(x.Item1)).ToList();
+            return list.OrderBy(x => x.Item1).ToList();
         }
 
-        // Улучшенная очистка от мусора
-        public static string CleanOutput(string output)
+        private static string Clean(string input)
         {
-            if (string.IsNullOrEmpty(output))
-                return output;
+            if (string.IsNullOrEmpty(input)) return "";
 
-            // Убираем только backspace
-            output = Regex.Replace(output, @"[\b\x08]+", "");
+            string output = input;
 
-            // Убираем длинные последовательности одинаковых символов (много пробелов или )
-            output = Regex.Replace(output, @"(\s)\1{5,}", " ");
-            output = Regex.Replace(output, @"()\1{3,}", "");
+            // Удаляем все управляющие символы и ^
+            output = Regex.Replace(output, @"[\b\x08\x07\x1B^]+", "");
 
-            // Убираем строки "Unknown command" и явные повторы команды
-            output = Regex.Replace(output, @"Unknown command.*$", "", RegexOptions.IgnoreCase | RegexOptions.Multiline);
-            output = Regex.Replace(output, @"^.*optical-transceiver-diagnosis.*$", "", RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            // Удаляем --More-- и всё после него до следующей полезной строки
+            output = Regex.Replace(output, @"--More--.*?(?=epon|\Z)", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
-            return output.Trim();
+            // Удаляем повторяющиеся команды
+            output = Regex.Replace(output, @"show epon optical-transceiver-diagnosis.*", "", RegexOptions.IgnoreCase);
+            output = Regex.Replace(output, @"optical-transceiver-diagnosis interface epon.*", "", RegexOptions.IgnoreCase);
+
+            // Удаляем промпт OLT
+            output = Regex.Replace(output, @"^.*OLT_.*#$", "", RegexOptions.Multiline);
+
+            // Удаляем строки с заголовками, которые не нужны
+            output = Regex.Replace(output, @"interface Temperature.*", "", RegexOptions.IgnoreCase);
+            output = Regex.Replace(output, @"-----------.*", "");
+
+            var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                              .Select(l => l.Trim())
+                              .Where(l => !string.IsNullOrWhiteSpace(l) &&
+                                          l.Contains("epon") && 
+                                          Regex.IsMatch(l, @"[-\d.]+")) // оставляем только строки с номером ONU и значением
+                              .ToList();
+
+            return string.Join("\n", lines);
         }
     }
 }
