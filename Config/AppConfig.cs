@@ -6,7 +6,7 @@ namespace BDCOM.OLT.Manager.Config
     internal static class AppConfig
     {
         public static string AppName { get; } = "BDCOM OLT Manager";
-        public static string Version { get; } = "1.7 C# edition";
+        public static string Version { get; } = "1.7.4 C# edition";
 
         // Папка для хранения всех настроек пользователя
         public static string ConfigDir { get; } 
